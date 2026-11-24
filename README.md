@@ -57,3 +57,9 @@ Extract and paste the folder into `...\steamapps\common\GarrysMod\garrysmod\addo
 - **Concept, testing, integration & game design:** Psychocrvsh
     
 - **AI Assistance:** Parts of the Lua architecture, debugging, and optimization were co-developed with AI assistance (Gemini).
+
+## License
+
+This project is open-source and licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
+
+You are free to use, modify, and redistribute this addon or build derivative versions of it, **provided that you include proper credit and a link back to the original repository ([Psychocrvsh/gmod-ffa-nextbots](https://github.com/Psychocrvsh/gmod-ffa-nextbots)) or Steam Workshop page**.
