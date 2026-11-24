@@ -17,8 +17,9 @@ A standalone, high-performance Free-For-All NextBot system for Garry's Mod built
 
 ## Installation
 
-### From Steam Workshop (Later)
+### From Steam Workshop
 Subscribe to the addon on the Steam Workshop and launch any map with a `.nav` file.
+https://steamcommunity.com/sharedfiles/filedetails/?id=3845191533
 
 ### Manual / Git Installation
 1. Clone or download this repository into your `garrysmod/addons/` directory:
