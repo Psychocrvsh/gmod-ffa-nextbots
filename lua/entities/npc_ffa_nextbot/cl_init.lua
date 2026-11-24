@@ -1,9 +1,18 @@
 include("shared.lua")
 
+local cvarTagScale = CreateClientConVar("ffa_nb_nametag_scale", "1.0", true, false)
+local cvarTagColor = CreateClientConVar("ffa_nb_nametag_color", "255 255 255", true, false)
+local cvarTagDist  = CreateClientConVar("ffa_nb_nametag_dist", "900", true, false)
+
+-- Pre-allocated objects to avoid per-frame garbage collection micro-stutters
+local HEAD_OFFSET   = Vector(0, 0, 80)
+local TAG_COLOR     = Color(255, 255, 255, 255)
+local OUTLINE_COLOR = Color(0, 0, 0, 255)
+
 -- Create font used for the 3D floating nametag above each bot's head
 surface.CreateFont("FFABot_NameTag", {
     font = "Roboto",
-    size = 26,
+    size = 32,
     weight = 700,
     antialias = true
 })
@@ -65,28 +74,38 @@ function ENT:Draw()
     local ply = LocalPlayer()
     if not IsValid(ply) then return end
 
-    -- Hide nametag beyond 900 units to keep the screen clean and save performance
+    -- Hide nametag beyond configured distance to keep the screen clean and save performance
+    local maxDist = math.Clamp(cvarTagDist:GetFloat(), 200, 2500)
+    local maxDistSqr = maxDist ^ 2
     local distSqr = ply:GetPos():DistToSqr(self:GetPos())
-    if distSqr > 900 ^ 2 then return end
+    if distSqr > maxDistSqr then return end
 
     -- Orient the 3D2D text plane so it always faces the local player's camera
-    local headPos = self:GetPos() + Vector(0, 0, 80)
+    local headPos = self:GetPos() + HEAD_OFFSET
     local ang = (ply:EyePos() - headPos):Angle()
     ang:RotateAroundAxis(ang:Forward(), 90)
     ang:RotateAroundAxis(ang:Right(), -90)
 
-    local alpha = math.Clamp(255 * (1 - (distSqr / (900 ^ 2))), 0, 255)
+    local alpha = math.Clamp(255 * (1 - (distSqr / maxDistSqr)), 0, 255)
+    local scale = 0.14 * math.Clamp(cvarTagScale:GetFloat(), 0.5, 3.0)
 
-    cam.Start3D2D(headPos, ang, 0.14)
+    local r, g, b = string.match(cvarTagColor:GetString(), "(%d+)%s+(%d+)%s+(%d+)")
+    TAG_COLOR.r = tonumber(r) or 255
+    TAG_COLOR.g = tonumber(g) or 255
+    TAG_COLOR.b = tonumber(b) or 255
+    TAG_COLOR.a = alpha
+    OUTLINE_COLOR.a = alpha
+
+    cam.Start3D2D(headPos, ang, scale)
         draw.SimpleTextOutlined(
             name,
             "FFABot_NameTag",
             0, 0,
-            Color(255, 255, 255, alpha),
+            TAG_COLOR,
             TEXT_ALIGN_CENTER,
             TEXT_ALIGN_CENTER,
             1.5,
-            Color(0, 0, 0, alpha)
+            OUTLINE_COLOR
         )
     cam.End3D2D()
 end

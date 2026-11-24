@@ -103,24 +103,47 @@ end)
 -- Spawning & Navmesh Management
 -- ==========================================
 
--- Find a valid spawn position on the Navmesh away from living players,
+local CachedNavAreas = nil
+
+local function GetCachedNavAreas()
+    if not CachedNavAreas then
+        CachedNavAreas = navmesh.GetAllNavAreas()
+    end
+    return CachedNavAreas
+end
+
+-- Validate that a candidate spawn position is inside the world and clear for a bot hull
+local function IsValidBotSpawn(pos)
+    if not util.IsInWorld(pos + Vector(0, 0, 10)) then
+        return false
+    end
+
+    local tr = util.TraceHull({
+        start = pos + Vector(0, 0, 4),
+        endpos = pos + Vector(0, 0, 4),
+        mins = Vector(-16, -16, 0),
+        maxs = Vector(16, 16, 72),
+        mask = MASK_NPCSOLID
+    })
+
+    return not tr.StartSolid and not tr.AllSolid
+end
+
+-- Find a valid spawn position across the map's Navmesh,
 -- falling back to standard map spawn entities if no Navmesh is present
 local function GetValidSpawnPoint()
     if MapHasNavmesh() then
-        local areas = navmesh.GetAllNavAreas()
-        for _ = 1, 15 do
-            local area = areas[math.random(#areas)]
-            if IsValid(area) and not area:IsUnderwater() and area:GetSizeX() > 40 and area:GetSizeY() > 40 then
-                local pt = area:GetRandomPoint() + Vector(0, 0, 10)
-                local tooClose = false
-                for _, ply in ipairs(player.GetAll()) do
-                    if ply:Alive() and ply:GetPos():DistToSqr(pt) < 500 ^ 2 then
-                        tooClose = true
-                        break
+        local areas = GetCachedNavAreas()
+        if #areas > 0 then
+            for _ = 1, 35 do
+                local area = areas[math.random(#areas)]
+                if IsValid(area) and not area:IsUnderwater() and area:GetSizeX() > 28 and area:GetSizeY() > 28 then
+                    if #area:GetAdjacentAreas() == 0 then continue end
+
+                    local pt = area:GetRandomPoint() + Vector(0, 0, 10)
+                    if IsValidBotSpawn(pt) then
+                        return pt
                     end
-                end
-                if not tooClose then
-                    return pt
                 end
             end
         end
@@ -134,7 +157,10 @@ local function GetValidSpawnPoint()
     if #spawns > 0 then
         local sp = spawns[math.random(#spawns)]
         if IsValid(sp) then
-            return sp:GetPos() + Vector(0, 0, 10)
+            local fallbackPos = sp:GetPos() + Vector(0, 0, 10)
+            if IsValidBotSpawn(fallbackPos) then
+                return fallbackPos
+            end
         end
     end
 
@@ -155,6 +181,45 @@ local function SpawnOneFFABot()
     bot:Activate()
     return true
 end
+
+-- ==========================================
+-- Stuck Bot Recovery (Teleport / Respawn)
+-- ==========================================
+
+timer.Create("FFABot_StuckMonitor", 1.5, 0, function()
+    local now = CurTime()
+
+    for _, ent in ipairs(ents.FindByClass("npc_ffa_nextbot")) do
+        if IsValid(ent) then
+            local pos = ent:GetPos()
+
+            if not ent.FFABot_LastPos then
+                ent.FFABot_LastPos = pos
+                ent.FFABot_LastMoveTime = now
+                continue
+            end
+
+            if pos:DistToSqr(ent.FFABot_LastPos) > (45 ^ 2) then
+                ent.FFABot_LastPos = pos
+                ent.FFABot_LastMoveTime = now
+                continue
+            end
+
+            if (now - ent.FFABot_LastMoveTime) >= 5 then
+                local newPos = GetValidSpawnPoint()
+                if newPos then
+                    ent:SetPos(newPos)
+                    ent.FFABot_LastPos = newPos
+                    ent.FFABot_LastMoveTime = now
+                else
+                    ent:Remove()
+                    SpawnOneFFABot()
+                end
+                break
+            end
+        end
+    end
+end)
 
 -- Admin console command: remove all active FFA NextBots
 concommand.Add("ffabot_clear", function(ply)

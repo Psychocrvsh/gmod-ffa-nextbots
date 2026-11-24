@@ -1,3 +1,11 @@
+-- convars
+local cvarTagScale = CreateClientConVar("ffa_nb_nametag_scale", "1.0", true, false, "Scale of bot overhead nametags", 0.5, 3.0)
+local cvarTagColor = CreateClientConVar("ffa_nb_nametag_color", "255 255 255", true, false, "RGB color of bot overhead nametags")
+local cvarTagScale = CreateClientConVar("ffa_nb_nametag_scale", "1.0", true, false, "Scale of bot overhead nametags", 0.5, 3.0)
+local cvarTagColor = CreateClientConVar("ffa_nb_nametag_color", "255 255 255", true, false, "RGB color of bot overhead nametags")
+local cvarTagDist  = CreateClientConVar("ffa_nb_nametag_dist", "900", true, false, "Max display distance for bot overhead nametags", 200, 2500)
+
+
 -- Periodically register connected player nicknames in the localization table
 -- so the native killfeed displays player names without a leading '#' prefix
 timer.Create("FFABot_RegisterPlayerNames", 3, 0, function()
@@ -61,6 +69,28 @@ hook.Add("PopulateToolMenu", "FFANextBots_Menu", function()
         panel:Button("Spawn 1 Bot Now", "ffabot_spawn_now")
         panel:Button("Remove All Bots", "ffabot_clear")
         panel:Button("Generate Navmesh (Map Reloads)", "ffabot_generate_nav")
+
+        -- ==========================================
+        -- Overhead Nametag Appearance (Client-side)
+        -- ==========================================
+        panel:Help("--- Overhead Nametag Appearance ---")
+        panel:NumSlider("Nametag Size", "ffa_nb_nametag_scale", 0.5, 3.0, 2)
+        panel:NumSlider("Nametag Distance", "ffa_nb_nametag_dist", 200, 2500, 0)
+
+        local colorMixer = vgui.Create("DColorMixer", panel)
+        colorMixer:SetLabel("Nametag Color")
+        colorMixer:SetPalette(true)
+        colorMixer:SetAlphaBar(false)
+        colorMixer:SetWangs(true)
+        colorMixer:SetHeight(160)
+
+        local r, g, b = string.match(cvarTagColor:GetString(), "(%d+)%s+(%d+)%s+(%d+)")
+        colorMixer:SetColor(Color(tonumber(r) or 255, tonumber(g) or 255, tonumber(b) or 255))
+
+        function colorMixer:ValueChanged(col)
+            RunConsoleCommand("ffa_nb_nametag_color", string.format("%d %d %d", col.r, col.g, col.b))
+        end
+        panel:AddItem(colorMixer)
 
         -- ==========================================
         -- Allowed Weapons Selection List
@@ -164,5 +194,6 @@ hook.Add("PopulateToolMenu", "FFANextBots_Menu", function()
             net.WriteString("models")
             net.SendToServer()
         end
+        
     end)
 end)

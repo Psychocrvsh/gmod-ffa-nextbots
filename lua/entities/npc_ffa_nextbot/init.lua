@@ -448,6 +448,19 @@ function ENT:EngageEnemy(enemy)
     end
 end
 
+-- Automatically open doors when the bot walks into them
+function ENT:OnContact(ent)
+    if not IsValid(ent) then return end
+
+    local cls = ent:GetClass()
+    if cls == "prop_door_rotating" or cls == "func_door" or cls == "func_door_rotating" then
+        if (ent.NextBotUseTime or 0) < CurTime() then
+            ent.NextBotUseTime = CurTime() + 1.5
+            ent:Fire("Open", "", 0)
+        end
+    end
+end
+
 -- Main NextBot coroutine loop: alternate between combat engagement and Navmesh roaming
 function ENT:RunBehaviour()
     while true do
