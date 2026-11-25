@@ -49,7 +49,7 @@ local function PrepareSubPanel(panel)
     panel:Help("Lightweight C++ Navmesh NextBots with custom playermodels and weapons.")
 
     if not HasNavmesh then
-        local warn = panel:Help("WARNING: This map has NO Navmesh (.nav)! Bots will not navigate properly until you generate one.")
+        local warn = panel:Help("WARNING: This map has no Navmesh (.nav)! Bots will not navigate properly until you generate one.")
         warn:SetTextColor(Color(220, 50, 50))
     end
 end
@@ -65,6 +65,10 @@ hook.Add("PopulateToolMenu", "FFANextBots_Menu", function()
         panel:Help("--- Spawning & Match ---")
         panel:CheckBox("Enable Automatic FFA Spawning", "ffabot_enabled")
         panel:NumSlider("Bot Quota (Max Active Bots)", "ffabot_quota", 0, 30, 0)
+        panel:CheckBox("Alternate Player Spawn (Navmesh)", "ffabot_alternate_spawn")
+
+        local altWarn = panel:Help("WARNING: Players may spawn outside intended map areas or in unexpected spots even with hull validation.")
+        altWarn:SetTextColor(Color(230, 140, 40))
 
         panel:Help("--- Bot Control ---")
         panel:CheckBox("Freeze Bots (No Movement / No Shooting)", "ffabot_freeze")
@@ -81,6 +85,12 @@ hook.Add("PopulateToolMenu", "FFANextBots_Menu", function()
     -- ==========================================
     spawnmenu.AddToolMenuOption("Utilities", "FFA NextBots", "FFANextBots_AI", "AI & Combat", "", "", function(panel)
         PrepareSubPanel(panel)
+
+        panel:Help("--- Difficulty Presets (100 HP) ---")
+        panel:Button("Recruit (Slow Reaction / Lower Accuracy)", "ffabot_set_difficulty", "recruit")
+        panel:Button("Regular (Balanced Default)", "ffabot_set_difficulty", "regular")
+        panel:Button("Hardened (Fast Reaction / Higher Accuracy)", "ffabot_set_difficulty", "hardened")
+        panel:Button("Veteran (Near-Instant Reaction / High Accuracy)", "ffabot_set_difficulty", "veteran")
 
         panel:Help("--- Bot Stats & Reaction ---")
         panel:NumSlider("Bot Health (HP)", "ffabot_health", 50, 300, 0)

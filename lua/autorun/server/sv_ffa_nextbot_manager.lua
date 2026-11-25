@@ -14,6 +14,31 @@ CreateConVar("ffabot_accuracy", "1.0", FCVAR_ARCHIVE, "Bot accuracy multiplier (
 CreateConVar("ffa_bot_reaction_time", "0.35", { FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY }, "Reaction delay in seconds before a bot fires upon spotting an enemy", 0.0, 2.0)
 CreateConVar("ffabot_freeze", "0", { FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY }, "Freeze all FFA NextBots (disable movement and firing)")
 CreateConVar("ffabot_ignore_players", "0", { FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY }, "Make FFA NextBots ignore players")
+CreateConVar("ffabot_alternate_spawn", "0", { FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY }, "Spawn players on validated Navmesh spots instead of default map spawns")
+
+-- Difficulty presets keeping base health at 100 while scaling bot accuracy and reaction delay
+local DIFFICULTY_PRESETS = {
+    recruit  = { label = "Recruit",  health = "100", accuracy = "0.65", reaction = "0.75" },
+    regular  = { label = "Regular",  health = "100", accuracy = "1.00", reaction = "0.35" },
+    hardened = { label = "Hardened", health = "100", accuracy = "1.40", reaction = "0.18" },
+    veteran  = { label = "Veteran",  health = "100", accuracy = "1.80", reaction = "0.08" }
+}
+
+-- Admin console command: apply a difficulty preset across bot combat ConVars
+concommand.Add("ffabot_set_difficulty", function(ply, _, args)
+    if IsValid(ply) and not ply:IsAdmin() then return end
+    local key = string.lower(tostring(args[1] or ""))
+    local preset = DIFFICULTY_PRESETS[key]
+    if not preset then return end
+
+    RunConsoleCommand("ffabot_health", preset.health)
+    RunConsoleCommand("ffabot_accuracy", preset.accuracy)
+    RunConsoleCommand("ffa_bot_reaction_time", preset.reaction)
+
+    if IsValid(ply) then
+        ply:ChatPrint("[FFA NextBots] Difficulty set to " .. preset.label .. ".")
+    end
+end)
 
 -- Global lookup tables storing allowed weapon classes and playermodel paths
 FFABot_AllowedWeapons = FFABot_AllowedWeapons or {}
@@ -131,6 +156,78 @@ local function IsValidBotSpawn(pos)
 
     return not tr.StartSolid and not tr.AllSolid
 end
+
+-- Validate a grounded Navmesh point for a standard player hull and ground contact
+local function IsValidPlayerSpawn(pos)
+    if not util.IsInWorld(pos + Vector(0, 0, 18)) then
+        return false
+    end
+
+    local tr = util.TraceHull({
+        start = pos + Vector(0, 0, 2),
+        endpos = pos + Vector(0, 0, 2),
+        mins = Vector(-16, -16, 0),
+        maxs = Vector(16, 16, 72),
+        mask = MASK_PLAYERSOLID
+    })
+
+    if tr.StartSolid or tr.AllSolid then
+        return false
+    end
+
+    local floorCheck = util.TraceLine({
+        start = pos + Vector(0, 0, 8),
+        endpos = pos - Vector(0, 0, 36),
+        mask = MASK_SOLID_BRUSHONLY
+    })
+
+    return floorCheck.Hit
+end
+
+-- Pick a validated Navmesh position for players when Alternate Spawn is enabled
+local function GetValidPlayerNavSpawn()
+    if not MapHasNavmesh() then return nil end
+
+    local areas = GetCachedNavAreas()
+    if not areas or #areas == 0 then return nil end
+
+    for _ = 1, 45 do
+        local area = areas[math.random(#areas)]
+        if IsValid(area) and not area:IsUnderwater() and area:GetSizeX() > 36 and area:GetSizeY() > 36 then
+            if #area:GetAdjacentAreas() == 0 then continue end
+
+            local rawPt = area:GetRandomPoint() + Vector(0, 0, 16)
+            local groundTr = util.TraceLine({
+                start = rawPt,
+                endpos = rawPt - Vector(0, 0, 128),
+                mask = MASK_SOLID_BRUSHONLY
+            })
+
+            local candidate = groundTr.Hit and (groundTr.HitPos + Vector(0, 0, 4)) or rawPt
+            if IsValidPlayerSpawn(candidate) then
+                return candidate
+            end
+        end
+    end
+
+    return nil
+end
+
+-- Relocate spawning players onto validated Navmesh spots when ffabot_alternate_spawn is active
+hook.Add("PlayerSpawn", "FFABot_AlternatePlayerSpawn", function(ply)
+    if not IsValid(ply) then return end
+    local altSpawnCvar = GetConVar("ffabot_alternate_spawn")
+    if not altSpawnCvar or not altSpawnCvar:GetBool() then return end
+
+    timer.Simple(0, function()
+        if not IsValid(ply) or not ply:Alive() then return end
+        local pos = GetValidPlayerNavSpawn()
+        if pos then
+            ply:SetPos(pos)
+            ply:SetAngles(Angle(0, math.random(0, 360), 0))
+        end
+    end)
+end)
 
 -- Find a valid spawn position across the map's Navmesh,
 -- falling back to standard map spawn entities if no Navmesh is present
