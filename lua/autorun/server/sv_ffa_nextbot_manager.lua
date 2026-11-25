@@ -5,12 +5,15 @@ util.AddNetworkString("FFABot_ClearSelections")
 util.AddNetworkString("FFABot_NavmeshStatus")
 util.AddNetworkString("FFABot_RequestNavStatus")
 
--- Persistent server-side ConVars controlling bot spawning, health, and accuracy
+-- Persistent server-side ConVars controlling bot spawning, health, accuracy, reaction time, freeze, and player targeting
 CreateConVar("ffabot_enabled", "0", FCVAR_ARCHIVE, "Enable automatic spawning of FFA NextBots")
 CreateConVar("ffabot_quota", "8", FCVAR_ARCHIVE, "Number of active FFA NextBots")
 CreateConVar("ffabot_only_custom_pm", "1", FCVAR_ARCHIVE, "Use Workshop playermodels only when none are selected")
 CreateConVar("ffabot_health", "100", FCVAR_ARCHIVE, "Health points of FFA NextBots")
 CreateConVar("ffabot_accuracy", "1.0", FCVAR_ARCHIVE, "Bot accuracy multiplier (0.2 to 2.5)")
+CreateConVar("ffa_bot_reaction_time", "0.35", { FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY }, "Reaction delay in seconds before a bot fires upon spotting an enemy", 0.0, 2.0)
+CreateConVar("ffabot_freeze", "0", { FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY }, "Freeze all FFA NextBots (disable movement and firing)")
+CreateConVar("ffabot_ignore_players", "0", { FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY }, "Make FFA NextBots ignore players")
 
 -- Global lookup tables storing allowed weapon classes and playermodel paths
 FFABot_AllowedWeapons = FFABot_AllowedWeapons or {}
@@ -65,7 +68,7 @@ hook.Add("PlayerInitialSpawn", "FFABot_SendNavStatus", function(ply)
         if IsValid(ply) then
             BroadcastNavStatus(ply)
             if not MapHasNavmesh() then
-                ply:ChatPrint("[FFA NextBots] WARNING: This map has no Navmesh (.nav). Open Q > Utilities > Admin > FFA NextBots and click 'Generate Navmesh'.")
+                ply:ChatPrint("[FFA NextBots] WARNING: This map has no Navmesh (.nav). Open Q > Utilities > FFA NextBots > General & Spawns and click 'Generate Navmesh'.")
             end
         end
     end)
@@ -188,10 +191,18 @@ end
 
 timer.Create("FFABot_StuckMonitor", 1.5, 0, function()
     local now = CurTime()
+    local frozenCvar = GetConVar("ffabot_freeze")
+    local isFrozen = frozenCvar and frozenCvar:GetBool()
 
     for _, ent in ipairs(ents.FindByClass("npc_ffa_nextbot")) do
         if IsValid(ent) then
             local pos = ent:GetPos()
+
+            if isFrozen then
+                ent.FFABot_LastPos = pos
+                ent.FFABot_LastMoveTime = now
+                continue
+            end
 
             if not ent.FFABot_LastPos then
                 ent.FFABot_LastPos = pos
@@ -258,7 +269,7 @@ timer.Create("FFANextBot_AutoSpawner", 1.5, 0, function()
 
     if not MapHasNavmesh() and not WarnedNoNav then
         WarnedNoNav = true
-        PrintMessage(HUD_PRINTTALK, "[FFA NextBots] ERROR: No Navmesh (.nav) detected on this map! Use 'Generate Navmesh' in Utilities > Admin > FFA NextBots.")
+        PrintMessage(HUD_PRINTTALK, "[FFA NextBots] ERROR: No Navmesh (.nav) detected on this map! Use 'Generate Navmesh' in Utilities > FFA NextBots > General & Spawns.")
     end
 
     local quota = math.Clamp(GetConVar("ffabot_quota"):GetInt(), 0, 40)

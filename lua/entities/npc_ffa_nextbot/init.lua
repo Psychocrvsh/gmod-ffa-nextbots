@@ -135,17 +135,91 @@ function ENT:Initialize()
     self:SetCollisionBounds(Vector(-16, -16, 0), Vector(16, 16, 72))
 
     -- Configure NextBot locomotion physics parameters
+    self.BaseMoveSpeed = 250
     self.loco:SetStepHeight(22)
     self.loco:SetJumpHeight(65)
     self.loco:SetAcceleration(900)
     self.loco:SetDeceleration(900)
-    self.loco:SetDesiredSpeed(250)
+    self.loco:SetDesiredSpeed(self.BaseMoveSpeed)
 
     self:EquipRandomWeapon()
 
     self.NextShotTime = CurTime() + 0.5
     self.NextTargetScan = 0
     self.Enemy = nil
+    self.TargetAcquiredTime = 0
+    self.ReactionDelay = 0
+    self.LastTurnTime = CurTime()
+end
+
+-- Check whether bots are currently frozen via ConVar
+function ENT:IsFrozen()
+    local cvar = GetConVar("ffabot_freeze")
+    return cvar and cvar:GetBool() or false
+end
+
+-- Apply or clear zero movement speed when ffabot_freeze is toggled
+function ENT:SyncFreezeSpeed()
+    local desired = self:IsFrozen() and 0 or (self.BaseMoveSpeed or 250)
+    if self.loco:GetDesiredSpeed() ~= desired then
+        self.loco:SetDesiredSpeed(desired)
+    end
+end
+
+-- Check whether a player should be ignored by bots
+function ENT:ShouldIgnorePlayer(ply)
+    if not IsValid(ply) or not ply:IsPlayer() then return false end
+    local ignoreMod = GetConVar("ffabot_ignore_players")
+    local ignoreEngine = GetConVar("ai_ignoreplayers")
+    return (ignoreMod and ignoreMod:GetBool()) or (ignoreEngine and ignoreEngine:GetBool()) or false
+end
+
+-- Arm or refresh the bot's reaction timer when acquiring or re-acquiring a visible target
+function ENT:ArmReactionTimer()
+    local cvar = GetConVar("ffa_bot_reaction_time")
+    local baseDelay = math.Clamp(cvar and cvar:GetFloat() or 0.35, 0, 2.0)
+    local jitter = baseDelay * math.Rand(-0.15, 0.15)
+    self.ReactionDelay = math.max(0, baseDelay + jitter)
+    self.TargetAcquiredTime = CurTime()
+end
+
+-- Assign a new target and reset the reaction delay whenever the enemy changes
+function ENT:SetEnemyTarget(newEnemy)
+    if IsValid(newEnemy) and newEnemy:IsPlayer() and self:ShouldIgnorePlayer(newEnemy) then
+        newEnemy = nil
+    end
+    if newEnemy == self.Enemy then return end
+    self.Enemy = newEnemy
+    if IsValid(newEnemy) then
+        self:ArmReactionTimer()
+    else
+        self.TargetAcquiredTime = 0
+        self.ReactionDelay = 0
+    end
+end
+
+-- Return true once the bot's reaction delay has elapsed since spotting the target
+function ENT:HasFinishedReacting()
+    if not IsValid(self.Enemy) then return false end
+    if (self.TargetAcquiredTime or 0) <= 0 then
+        self:ArmReactionTimer()
+    end
+    return (CurTime() - self.TargetAcquiredTime) >= (self.ReactionDelay or 0)
+end
+
+-- Smoothly turn the bot toward a world position instead of snapping yaw instantaneously
+function ENT:TurnSmoothlyToward(targetPos, turnRateDegPerSec)
+    local now = CurTime()
+    local dt = math.Clamp(now - (self.LastTurnTime or now), 0.005, 0.1)
+    self.LastTurnTime = now
+
+    local myPos = self:GetPos()
+    local desiredYaw = (targetPos - myPos):Angle().y
+    local currentYaw = self:GetAngles().y
+    local rate = turnRateDegPerSec or (self:HasFinishedReacting() and 340 or 180)
+
+    local nextYaw = math.ApproachAngle(currentYaw, desiredYaw, rate * dt)
+    self:SetAngles(Angle(0, nextYaw, 0))
 end
 
 -- Pick a weapon from the allowed pool (or fallback HL2 weapons) and replicate its worldmodel
@@ -181,7 +255,7 @@ end
 -- Update movement sequences, directional move_x/move_y pose parameters, and upper-body aim angles
 function ENT:UpdateAnimations()
     local ht = (self.WeaponData and self.WeaponData.holdtype) or "ar2"
-    local vel = self.loco:GetVelocity()
+    local vel = self:IsFrozen() and Vector(0, 0, 0) or self.loco:GetVelocity()
     local speed = vel:Length2D()
 
     local seqName = "idle_ar2"
@@ -220,7 +294,7 @@ function ENT:UpdateAnimations()
         self:SetPlaybackRate(1)
     end
 
-    if IsValid(self.Enemy) and self.Enemy:Health() > 0 then
+    if not self:IsFrozen() and IsValid(self.Enemy) and self.Enemy:Health() > 0 and self:HasFinishedReacting() then
         local eyePos = self:GetPos() + Vector(0, 0, 56)
         local targetPos = self.Enemy:GetPos() + Vector(0, 0, 48)
         local ang = (targetPos - eyePos):Angle()
@@ -237,6 +311,7 @@ end
 
 -- Advance animations every engine tick
 function ENT:BodyUpdate()
+    self:SyncFreezeSpeed()
     self:UpdateAnimations()
     self:FrameAdvance()
 end
@@ -261,12 +336,11 @@ function ENT:FindNearestEnemy()
     local bestTarget = nil
     local bestDist = 3500 ^ 2
     local myPos = self:GetPos()
-    local ignorePlayers = GetConVar("ai_ignoreplayers"):GetBool()
 
     for _, ent in ipairs(ents.GetAll()) do
         if ent ~= self and IsValid(ent) then
             local validTarget = false
-            if ent:IsPlayer() and ent:Alive() and not ignorePlayers then
+            if ent:IsPlayer() and ent:Alive() and not self:ShouldIgnorePlayer(ent) then
                 validTarget = true
             elseif ent:GetClass() == "npc_ffa_nextbot" and ent:Health() > 0 then
                 validTarget = true
@@ -287,8 +361,11 @@ end
 
 -- Fire hitscan bullets, emit weapon sound, and trigger muzzleflash effect
 function ENT:FireAtEnemy(enemy)
+    if self:IsFrozen() then return end
     if CurTime() < self.NextShotTime then return end
+    if not self:HasFinishedReacting() then return end
     if not IsValid(enemy) or not self.WeaponData then return end
+    if enemy:IsPlayer() and self:ShouldIgnorePlayer(enemy) then return end
 
     local wep = self.WeaponData
     local accMult = math.Clamp(GetConVar("ffabot_accuracy"):GetFloat(), 0.2, 2.5)
@@ -323,6 +400,11 @@ end
 
 -- Navigate along a Navmesh path toward a destination while scanning for enemies and avoiding stuck states
 function ENT:MoveToPosition(pos, maxTime)
+    if self:IsFrozen() then
+        self:SyncFreezeSpeed()
+        return false
+    end
+
     local path = Path("Follow")
     path:SetMinLookAheadDistance(300)
     path:SetGoalTolerance(45)
@@ -337,10 +419,21 @@ function ENT:MoveToPosition(pos, maxTime)
     local lastCheckPos = self:GetPos()
 
     while path:IsValid() and CurTime() < endTime do
+        if self:IsFrozen() then
+            self:SyncFreezeSpeed()
+            return false
+        end
+
+        self:SyncFreezeSpeed()
+
+        if IsValid(self.Enemy) and self.Enemy:IsPlayer() and self:ShouldIgnorePlayer(self.Enemy) then
+            self:SetEnemyTarget(nil)
+        end
+
         if CurTime() > self.NextTargetScan then
             self.NextTargetScan = CurTime() + 0.2
             if not IsValid(self.Enemy) or self.Enemy:Health() <= 0 or not self:CanSeeTarget(self.Enemy) then
-                self.Enemy = self:FindNearestEnemy()
+                self:SetEnemyTarget(self:FindNearestEnemy())
             end
         end
 
@@ -377,16 +470,48 @@ end
 
 -- Combat state: strafe dynamically while checking walls and ledges, and fire at the active enemy
 function ENT:EngageEnemy(enemy)
+    if self:IsFrozen() then
+        self:SyncFreezeSpeed()
+        return
+    end
+
+    if IsValid(enemy) and enemy:IsPlayer() and self:ShouldIgnorePlayer(enemy) then
+        self:SetEnemyTarget(nil)
+        return
+    end
+
     local endStrafeTime = CurTime() + math.Rand(0.7, 1.3)
     local sideDir = (math.random(0, 1) == 0 and -1 or 1)
     local moveMode = math.random(1, 3)
     local stuckTimer = CurTime()
     local lastPos = self:GetPos()
+    self.LastTurnTime = CurTime()
+
+    if (self.TargetAcquiredTime or 0) <= 0 then
+        self:ArmReactionTimer()
+    end
 
     while IsValid(enemy) and enemy:Health() > 0 and CurTime() < endStrafeTime do
+        if self:IsFrozen() then
+            self:SyncFreezeSpeed()
+            return
+        end
+
+        if enemy:IsPlayer() and self:ShouldIgnorePlayer(enemy) then
+            self:SetEnemyTarget(nil)
+            return
+        end
+
+        self:SyncFreezeSpeed()
+
         if not self:CanSeeTarget(enemy) then
+            self.TargetAcquiredTime = 0
             self:MoveToPosition(enemy:GetPos(), 2.5)
             return
+        end
+
+        if (self.TargetAcquiredTime or 0) <= 0 then
+            self:ArmReactionTimer()
         end
 
         local myPos = self:GetPos()
@@ -395,9 +520,8 @@ function ENT:EngageEnemy(enemy)
         local toEnemy = (enemyPos - myPos):GetNormalized()
         local right = toEnemy:Angle():Right()
 
-        local lookAng = (enemyPos - myPos):Angle()
-        self:SetAngles(Angle(0, lookAng.y, 0))
-        self.loco:FaceTowards(enemyPos)
+        -- Smoothly turn yaw instead of snapping immediately toward the enemy
+        self:TurnSmoothlyToward(enemyPos, self:HasFinishedReacting() and 340 or 180)
 
         local moveVec = right * sideDir
         if dist < 320 or moveMode == 3 then
@@ -450,7 +574,7 @@ end
 
 -- Automatically open doors when the bot walks into them
 function ENT:OnContact(ent)
-    if not IsValid(ent) then return end
+    if self:IsFrozen() or not IsValid(ent) then return end
 
     local cls = ent:GetClass()
     if cls == "prop_door_rotating" or cls == "func_door" or cls == "func_door_rotating" then
@@ -464,9 +588,14 @@ end
 -- Main NextBot coroutine loop: alternate between combat engagement and Navmesh roaming
 function ENT:RunBehaviour()
     while true do
-        if IsValid(self.Enemy) and self.Enemy:Health() > 0 then
+        self:SyncFreezeSpeed()
+
+        if self:IsFrozen() then
+            coroutine.wait(0.2)
+        elseif IsValid(self.Enemy) and self.Enemy:Health() > 0 and not (self.Enemy:IsPlayer() and self:ShouldIgnorePlayer(self.Enemy)) then
             self:EngageEnemy(self.Enemy)
         else
+            self:SetEnemyTarget(nil)
             local targetPos = nil
             local areas = navmesh.GetAllNavAreas()
             if areas and #areas > 0 then
@@ -492,11 +621,24 @@ function ENT:RunBehaviour()
     end
 end
 
--- Immediately acquire the attacker as current target upon taking damage
+-- Acquire the attacker as current target upon taking damage, arming reaction delay if newly spotted
 function ENT:OnInjured(dmginfo)
     local attacker = dmginfo:GetAttacker()
-    if IsValid(attacker) and attacker ~= self and (attacker:IsPlayer() or attacker:GetClass() == "npc_ffa_nextbot") then
-        self.Enemy = attacker
+    if IsValid(attacker) and attacker ~= self then
+        if attacker:IsPlayer() then
+            if self:ShouldIgnorePlayer(attacker) then return end
+            if attacker ~= self.Enemy then
+                self:SetEnemyTarget(attacker)
+            elseif (self.TargetAcquiredTime or 0) <= 0 then
+                self:ArmReactionTimer()
+            end
+        elseif attacker:GetClass() == "npc_ffa_nextbot" then
+            if attacker ~= self.Enemy then
+                self:SetEnemyTarget(attacker)
+            elseif (self.TargetAcquiredTime or 0) <= 0 then
+                self:ArmReactionTimer()
+            end
+        end
     end
 end
 

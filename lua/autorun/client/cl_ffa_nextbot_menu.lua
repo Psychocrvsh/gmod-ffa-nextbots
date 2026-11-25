@@ -1,10 +1,7 @@
 -- convars
 local cvarTagScale = CreateClientConVar("ffa_nb_nametag_scale", "1.0", true, false, "Scale of bot overhead nametags", 0.5, 3.0)
 local cvarTagColor = CreateClientConVar("ffa_nb_nametag_color", "255 255 255", true, false, "RGB color of bot overhead nametags")
-local cvarTagScale = CreateClientConVar("ffa_nb_nametag_scale", "1.0", true, false, "Scale of bot overhead nametags", 0.5, 3.0)
-local cvarTagColor = CreateClientConVar("ffa_nb_nametag_color", "255 255 255", true, false, "RGB color of bot overhead nametags")
 local cvarTagDist  = CreateClientConVar("ffa_nb_nametag_dist", "900", true, false, "Max display distance for bot overhead nametags", 200, 2500)
-
 
 -- Periodically register connected player nicknames in the localization table
 -- so the native killfeed displays player names without a leading '#' prefix
@@ -41,60 +38,64 @@ local function LoadClientCache()
     end
 end
 
--- Build the FFA NextBots configuration panel inside Spawn Menu > Utilities > Admin
+-- Request fresh navmesh status and clear panel before populating a sub-tab
+local function PrepareSubPanel(panel)
+    LoadClientCache()
+    panel:ClearControls()
+
+    net.Start("FFABot_RequestNavStatus")
+    net.SendToServer()
+
+    panel:Help("Lightweight C++ Navmesh NextBots with custom playermodels and weapons.")
+
+    if not HasNavmesh then
+        local warn = panel:Help("WARNING: This map has NO Navmesh (.nav)! Bots will not navigate properly until you generate one.")
+        warn:SetTextColor(Color(220, 50, 50))
+    end
+end
+
+-- Build the FFA NextBots configuration tabs inside Spawn Menu > Utilities > FFA NextBots
 hook.Add("PopulateToolMenu", "FFANextBots_Menu", function()
-    spawnmenu.AddToolMenuOption("Utilities", "Admin", "FFANextBots_Settings", "FFA NextBots", "", "", function(panel)
-        LoadClientCache()
-        panel:ClearControls()
+    -- ==========================================
+    -- Tab 1: General & Spawns
+    -- ==========================================
+    spawnmenu.AddToolMenuOption("Utilities", "FFA NextBots", "FFANextBots_General", "General & Spawns", "", "", function(panel)
+        PrepareSubPanel(panel)
 
-        -- Request up-to-date Navmesh status whenever the menu is opened
-        net.Start("FFABot_RequestNavStatus")
-        net.SendToServer()
-
-        panel:Help("Lightweight C++ Navmesh NextBots with custom playermodels and weapons.")
-
-        -- Display a red warning banner if the current map lacks a .nav file
-        if not HasNavmesh then
-            local warn = panel:Help("WARNING: This map has NO Navmesh (.nav)! Bots will not navigate properly until you generate one.")
-            warn:SetTextColor(Color(220, 50, 50))
-        end
-
-        -- General bot behavior sliders and checkboxes
+        panel:Help("--- Spawning & Match ---")
         panel:CheckBox("Enable Automatic FFA Spawning", "ffabot_enabled")
         panel:NumSlider("Bot Quota (Max Active Bots)", "ffabot_quota", 0, 30, 0)
-        panel:NumSlider("Bot Health (HP)", "ffabot_health", 50, 300, 0)
-        panel:NumSlider("Bot Accuracy Multiplier", "ffabot_accuracy", 0.3, 2.0, 2)
 
-        -- Quick admin action buttons
+        panel:Help("--- Bot Control ---")
+        panel:CheckBox("Freeze Bots (No Movement / No Shooting)", "ffabot_freeze")
+        panel:CheckBox("Ignore Players", "ffabot_ignore_players")
+
+        panel:Help("--- Actions ---")
         panel:Button("Spawn 1 Bot Now", "ffabot_spawn_now")
         panel:Button("Remove All Bots", "ffabot_clear")
         panel:Button("Generate Navmesh (Map Reloads)", "ffabot_generate_nav")
+    end)
 
-        -- ==========================================
-        -- Overhead Nametag Appearance (Client-side)
-        -- ==========================================
-        panel:Help("--- Overhead Nametag Appearance ---")
-        panel:NumSlider("Nametag Size", "ffa_nb_nametag_scale", 0.5, 3.0, 2)
-        panel:NumSlider("Nametag Distance", "ffa_nb_nametag_dist", 200, 2500, 0)
+    -- ==========================================
+    -- Tab 2: AI & Combat
+    -- ==========================================
+    spawnmenu.AddToolMenuOption("Utilities", "FFA NextBots", "FFANextBots_AI", "AI & Combat", "", "", function(panel)
+        PrepareSubPanel(panel)
 
-        local colorMixer = vgui.Create("DColorMixer", panel)
-        colorMixer:SetLabel("Nametag Color")
-        colorMixer:SetPalette(true)
-        colorMixer:SetAlphaBar(false)
-        colorMixer:SetWangs(true)
-        colorMixer:SetHeight(160)
+        panel:Help("--- Bot Stats & Reaction ---")
+        panel:NumSlider("Bot Health (HP)", "ffabot_health", 50, 300, 0)
+        panel:NumSlider("Bot Accuracy Multiplier", "ffabot_accuracy", 0.3, 2.0, 2)
+        panel:NumSlider("Reaction Time (sec)", "ffa_bot_reaction_time", 0.0, 2.0, 2)
+        panel:ControlHelp("Delay before a bot opens fire after spotting a target.")
+    end)
 
-        local r, g, b = string.match(cvarTagColor:GetString(), "(%d+)%s+(%d+)%s+(%d+)")
-        colorMixer:SetColor(Color(tonumber(r) or 255, tonumber(g) or 255, tonumber(b) or 255))
+    -- ==========================================
+    -- Tab 3: Loadout & Visuals
+    -- ==========================================
+    spawnmenu.AddToolMenuOption("Utilities", "FFA NextBots", "FFANextBots_Loadout", "Loadout & Visuals", "", "", function(panel)
+        PrepareSubPanel(panel)
 
-        function colorMixer:ValueChanged(col)
-            RunConsoleCommand("ffa_nb_nametag_color", string.format("%d %d %d", col.r, col.g, col.b))
-        end
-        panel:AddItem(colorMixer)
-
-        -- ==========================================
         -- Allowed Weapons Selection List
-        -- ==========================================
         panel:Help("--- Allowed Weapons (Click to Toggle) ---")
         panel:Help("If none selected: bots use default HL2 weapons.")
 
@@ -147,9 +148,7 @@ hook.Add("PopulateToolMenu", "FFANextBots_Menu", function()
             net.SendToServer()
         end
 
-        -- ==========================================
         -- Allowed Playermodels Selection List
-        -- ==========================================
         panel:Help("--- Allowed Playermodels (Click to Toggle) ---")
         panel:CheckBox("If none selected: Workshop models only", "ffabot_only_custom_pm")
 
@@ -194,6 +193,25 @@ hook.Add("PopulateToolMenu", "FFANextBots_Menu", function()
             net.WriteString("models")
             net.SendToServer()
         end
-        
+
+        -- Overhead Nametag Appearance (Client-side)
+        panel:Help("--- Overhead Nametag Appearance ---")
+        panel:NumSlider("Nametag Size", "ffa_nb_nametag_scale", 0.5, 3.0, 2)
+        panel:NumSlider("Nametag Distance", "ffa_nb_nametag_dist", 200, 2500, 0)
+
+        local colorMixer = vgui.Create("DColorMixer", panel)
+        colorMixer:SetLabel("Nametag Color")
+        colorMixer:SetPalette(true)
+        colorMixer:SetAlphaBar(false)
+        colorMixer:SetWangs(true)
+        colorMixer:SetHeight(160)
+
+        local r, g, b = string.match(cvarTagColor:GetString(), "(%d+)%s+(%d+)%s+(%d+)")
+        colorMixer:SetColor(Color(tonumber(r) or 255, tonumber(g) or 255, tonumber(b) or 255))
+
+        function colorMixer:ValueChanged(col)
+            RunConsoleCommand("ffa_nb_nametag_color", string.format("%d %d %d", col.r, col.g, col.b))
+        end
+        panel:AddItem(colorMixer)
     end)
 end)
